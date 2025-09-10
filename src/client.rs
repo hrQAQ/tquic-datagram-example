@@ -7,7 +7,6 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -158,7 +157,7 @@ impl Client {
         let mut cfg = Config::new()?;
         cfg.set_max_idle_timeout(opt.idle_timeout);
         if let Some(cca) = &opt.cca {
-            info!("set CCA={cca} (hook here if API available)");
+            info!("set CCA={cca}");
             let cca = match cca.as_str() {
                 "Cubic" => CongestionControlAlgorithm::Cubic,
                 "Bbr" => CongestionControlAlgorithm::Bbr,
@@ -445,7 +444,6 @@ impl TransportHandler for ClientHandler {
 
     fn on_conn_established(&mut self, conn: &mut Connection) {
         info!("{} conn established", conn.trace_id());
-        // 如果你们 fork 有 open_uni()，可在这里：
         let sid = conn.stream_bidi_new(3, true).unwrap_or(0);
         self.stream_id = Some(sid);
         self.next_deadline = Instant::now();
@@ -486,18 +484,24 @@ impl TransportHandler for ClientHandler {
 
     // datagram 事件用于继续推进发送
     fn on_datagram_acked(&mut self, conn: &mut Connection) {
+        info!("{} dgram acked", conn.trace_id());
         self.try_send_more(conn);
     }
     fn on_datagram_drop(&mut self, conn: &mut Connection) {
+        info!("{} dgram dropped", conn.trace_id());
         self.try_send_more(conn);
     }
     fn on_datagram_longtime(&mut self, conn: &mut Connection) {
+        info!("{} dgram longtime", conn.trace_id());
         self.try_send_more(conn);
     }
-    fn on_datagram_losted(&mut self, conn: &mut Connection) {
+    fn on_datagram_lost(&mut self, conn: &mut Connection) {
+        info!("{} dgram lost", conn.trace_id());
         self.try_send_more(conn);
     }
-    fn on_datagram_recvived(&mut self, _conn: &mut Connection) {}
+    fn on_datagram_received(&mut self, _conn: &mut Connection) {
+        // client 不收数据
+    }
 }
 
 fn monotonic_ns() -> u64 {

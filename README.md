@@ -80,64 +80,24 @@ mkdir -p results/raw_csv results/recv
 ### 丢包测试
 
 ```bash
-export RUN=smoke_$(date +%Y%m%d_%H%M%S)
+mm-delay 25
+mm-link trace/96Mbps.log trace/96Mbps.log
 
-mm-delay 25 mm-link  "trace/12Mbps.log" "trace/12Mbps.log" -- sh -c '
-            mm-loss uplink 0.0 \
-            ./target/debug/client --connect-to $MAHIMAHI_BASE:4433 \
-            --mode stream \
-            --in-file testdata/send/test.txt \
-            --rate-mbps 0.1 --chunk-bytes 1200 \
-            --csv-send results/raw_csv/client_send_datagram.csv \
-            --log-level debug' > client_send.log 2>&1
+[delay 25 ms] [link] $  scripts/run_loss.sh
 ```
 
 ### 拥塞 + 优先级测试
 
-并发两条流：低优先级 **stream** 400 Mbps，和高优先级 **datagram** 10 Mbps。
-
-```bash
-export RUN=prio_$(date +%Y%m%d_%H%M%S)
-
-mm-delay 25 mm-link trace/500Mbps.log trace/500Mbps.log -- \
-sh -c "./target/release/client --connect-to \\$MAHIMAHI_BASE:4433 \
-  --mode stream --rate-mbps 400 --in-file testdata/test.bin \
-  --csv-send results/raw_csv/${RUN}/client_stream.csv & \
-sleep 1; \
-./target/release/client --connect-to \\$MAHIMAHI_BASE:4433 \
-  --mode datagram --rate-mbps 10 --in-file testdata/test.bin \
-  --csv-send results/raw_csv/${RUN}/client_dgram.csv"
-```
+TODO
 
 ---
 
 ## 6. 数据分析
 
-在 `results/raw_csv/` 下会生成：
-
-- `client_send_*.csv`
-- `server_recv.csv`
+在 `results/raw_csv/` 下会生成多个 CSV 文件，包含发送和接收的详细日志，根据这些日志可以计算丢包率、端到端延迟等指标。
 
 使用分析脚本：
 
 ```bash
-python3 scripts/analyze.py --input results/raw_csv/${RUN} --out-dir results/figures/${RUN}
+python scripts/analyze_loss.py --run-dir results/raw_csv/loss_20250910_114931 --out-root results/analysis             
 ```
-
----
-
-## 7. 常见问题
-
-- **错误：`downlink: No such file or directory`**  
-  → 说明 `mm-loss` 参数没加 `--` 分隔。  
-
-- **错误：`error opening for reading`**  
-  → 说明 `trace/500Mbps.log` 文件不存在或格式不对。  
-
-- **证书问题**  
-  → 可用以下命令生成：
-
-  ```bash
-  mkdir -p certs
-  openssl req -new -x509 -nodes -out certs/server.crt -keyout certs/server.key -days 365
-  ```

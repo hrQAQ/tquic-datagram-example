@@ -417,7 +417,6 @@ impl ServerHandler {
                         );
                         // close connection after stream finished
                         let _ = conn.close(true, 0x00, b"ok");
-                        break;
                     }
                 }
                 Err(Error::Done) => break,
@@ -473,7 +472,7 @@ impl TransportHandler for ServerHandler {
     fn on_new_token(&mut self, _conn: &mut Connection, _token: Vec<u8>) {}
 
     // ===== Datagram 回调 =====
-    fn on_datagram_recvived(&mut self, conn: &mut Connection) {
+    fn on_datagram_received(&mut self, conn: &mut Connection) {
         self.handle_datagram(conn);
     }
     fn on_datagram_acked(&mut self, conn: &mut Connection) {
@@ -485,8 +484,8 @@ impl TransportHandler for ServerHandler {
     fn on_datagram_longtime(&mut self, conn: &mut Connection) {
         debug!("{} dgram longtime", conn.trace_id());
     }
-    fn on_datagram_losted(&mut self, conn: &mut Connection) {
-        debug!("{} dgram losted", conn.trace_id());
+    fn on_datagram_lost(&mut self, conn: &mut Connection) {
+        debug!("{} dgram lost", conn.trace_id());
     }
 }
 

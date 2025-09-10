@@ -1,53 +1,75 @@
 #!/usr/bin/env bash
+# Loss-sweep under Mahimahi, comparing QUIC Datagram vs Stream
+# - Uses mm-delay + mm-link + mm-loss
+# - Loss 'rate' is PROBABILITY in [0,1] (e.g., 0.01 == 1%)
+# - Ensures MTU fairness by fixing UDP payload budget (DEFAULT_UDP_PAYLOAD_B=1200)
 set -euo pipefail
 
-# ========== 可调参数 ==========
-FILE="testdata/test.bin"
-RATE_MBPS=12
-CHUNK=(200 1024 2048 4096 8192 16384 32768)
-LOSSES=("0.0" "0.005" "0.01" "0.02")
-BW="500Mbit"
-RTT_MS=50
-CCA_LIST=("bbr" "cubic")            # 你的 fork 如果支持 --cca
+# ===== User knobs =====
+TRACE_UP="trace/96Mbps.log"
+TRACE_DN="trace/96Mbps.log"
+ONE_WAY_DELAY_MS=25                  # RTT ~= 2 * 25ms
+LOSSES=("0.0" "0.005" "0.01" "0.02" "0.05") # 0%, 0.5%, 1%, 2%, 5%
+CHUNKS=(1200)     # app chunk sizes to sweep
+CCA_LIST=("Bbr")      # different congestion control algorithms
+RATE_MBPS=95
+MODES=("datagram" "stream")
+MAX_DATAGRAM_FRAME_SIZE=65535       # max datagram frame size allowed by QUIC spec
+
+CLIENT="./target/debug/client"
+SERVER_CSV="results/raw_csv/server_recv.csv"
+OUT_ROOT="results/raw_csv"
 RUN_TAG="loss_$(date +%Y%m%d_%H%M%S)"
+OUT_DIR="${OUT_ROOT}/${RUN_TAG}"
 
-# 计算 BDP 队列（近似）
-MSS=${CHUNK}
-BW_bps=$(echo $BW | sed 's/Mbit/*1000000/;s/Kbit/*1000/;s/bit//;s/Mbps/*1000000/;s/Kbps/*1000/' | bc -l)
-RTT_S=$(echo "$RTT_MS/1000" | bc -l)
-BDP_PKTS=$(printf "%.0f" "$(echo "$BW_bps * $RTT_S / (8 * $MSS)" | bc -l)")
+mkdir -p "${OUT_DIR}"
 
-echo "[INFO] RUN_TAG=$RUN_TAG  BDP_PKTS=$BDP_PKTS"
+# Basic checks
+[[ -f "${TRACE_UP}" ]] || { echo "[ERR] missing ${TRACE_UP}"; exit 1; }
+[[ -f "${TRACE_DN}" ]] || { echo "[ERR] missing ${TRACE_DN}"; exit 1; }
+[[ -x "${CLIENT}" ]]   || { echo "[ERR] missing client at ${CLIENT}"; exit 1; }
 
-mkdir -p "results/raw_csv/${RUN_TAG}"
+echo "[INFO] RUN_TAG=${RUN_TAG}  OUT_DIR=${OUT_DIR}"
+echo "[INFO] Using loss rates (probabilities): ${LOSSES[*]}"
 
 for cca in "${CCA_LIST[@]}"; do
   for loss in "${LOSSES[@]}"; do
-    for mode in datagram stream; do
-      echo "[INFO] ==> CCA=$cca LOSS=${loss}% MODE=$mode"
+    for mode in "${MODES[@]}"; do
+      for chunk in "${CHUNKS[@]}"; do
+        tag="mode(${mode})_loss(${loss})_cca(${cca})_chunk(${chunk})"
+        send_csv="${OUT_DIR}/client_send_${tag}.csv"
+        echo "[INFO] ==> ${tag}"
 
-      # 每次运行前，设置输出文件（避免互相覆盖）
-      SEND_CSV="results/raw_csv/${RUN_TAG}/client_send_${mode}_loss${loss}_cca${cca}.csv"
-      RECV_CSV="results/raw_csv/server_recv.csv" # server 端已固定；建议跑完及时备份归档
 
-      # Mahimahi 客户端侧运行
-      mm-delay $((RTT_MS/2)) \
-      mm-link --downlink-trace "$BW" --uplink-trace "$BW" \
-      -- sh -c "mm-loss uplink ${loss} downlink ${loss} mm-queue ${BDP_PKTS} \
-        ./client \
-          --connect-to \$MAHIMAHI_BASE:4433 \
-          --mode $mode \
-          --in-file $FILE \
-          --rate-mbps $RATE_MBPS \
-          --chunk-bytes $CHUNK \
-          --csv-send $SEND_CSV \
-          --cca $cca"
-
-      # 备份服务端 CSV（按运行 tag+参数重命名）
-      cp "$RECV_CSV" "results/raw_csv/${RUN_TAG}/server_recv_${mode}_loss${loss}_cca${cca}.csv"
-      : > "$RECV_CSV"  # 清空 server 的 CSV，方便下一轮
+        # mm-delay 25 mm-link  "trace/12Mbps.log" "trace/12Mbps.log" -- sh -c '
+            # mm-loss uplink 0.2 \
+            # ./target/debug/client --connect-to $MAHIMAHI_BASE:4433 \
+            # --mode stream \
+            # --in-file testdata/send/test.txt \
+            # --rate-mbps 1 --chunk-bytes 8192 \
+            # --csv-send results/raw_csv/stream.csv \
+            # --log-level debug' > client_send.log 2>&1
+        # NOTE: mm-loss takes probabilities in [0,1]. Use single mm-loss with both directions.
+        mm-loss uplink "${loss}" \
+        "${CLIENT}" \
+          --connect-to "$MAHIMAHI_BASE:4433" \
+          --mode "${mode}" \
+          --in-file "testdata/send/syslog.log" \
+          --rate-mbps "${RATE_MBPS}" \
+          --chunk-bytes "${chunk}" \
+          --csv-send "${send_csv}" \
+          --cca "${cca}" \
+          --max-datagram-frame-size "${MAX_DATAGRAM_FRAME_SIZE}"
+        # archive server csv with same tag; server must be running persistently
+        if [[ -f "${SERVER_CSV}" ]]; then
+          cp "${SERVER_CSV}" "${OUT_DIR}/server_recv_${tag}.csv"
+          : > "${SERVER_CSV}" # truncate for next run
+        else
+          echo "[WARN] server CSV not found at ${SERVER_CSV}"
+        fi
+      done
     done
   done
 done
 
-echo "[INFO] Finished run_loss. All CSV in results/raw_csv/${RUN_TAG}"
+echo "[INFO] Finished. CSV at ${OUT_DIR}"
