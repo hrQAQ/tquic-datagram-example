@@ -63,11 +63,11 @@ dd if=/dev/urandom of=testdata/test.bin bs=1M count=50
 ```bash
 mkdir -p results/raw_csv results/recv
 
-./target/release/server \
+./target/debug/server \
   --listen 0.0.0.0:4433 \
-  --cert certs/server.crt \
-  --key certs/server.key \
-  --out-dir results/recv \
+  --cert src/cert.crt \
+  --key src/cert.key \
+  --out-dir testdata/recv \
   --csv-recv results/raw_csv/server_recv.csv
 ```
 
@@ -82,14 +82,14 @@ mkdir -p results/raw_csv results/recv
 ```bash
 export RUN=smoke_$(date +%Y%m%d_%H%M%S)
 
-mm-delay 25 \
-mm-loss uplink 0.01 downlink 0.01 \
-mm-link trace/500Mbps.log trace/500Mbps.log -- \
-./target/release/client --connect-to $MAHIMAHI_BASE:4433 \
-  --mode datagram \
-  --in-file testdata/test.bin \
-  --rate-mbps 10 --chunk-bytes 1200 \
-  --csv-send results/raw_csv/${RUN}/client_send_datagram.csv
+mm-delay 25 mm-link  "trace/12Mbps.log" "trace/12Mbps.log" -- sh -c '
+            mm-loss uplink 0.0 \
+            ./target/debug/client --connect-to $MAHIMAHI_BASE:4433 \
+            --mode stream \
+            --in-file testdata/send/test.txt \
+            --rate-mbps 0.1 --chunk-bytes 1200 \
+            --csv-send results/raw_csv/client_send_datagram.csv \
+            --log-level debug' > client_send.log 2>&1
 ```
 
 ### 拥塞 + 优先级测试

@@ -3,9 +3,9 @@ set -euo pipefail
 
 # ========== 可调参数 ==========
 FILE="testdata/test.bin"
-RATE_MBPS=10
-CHUNK=1200
-LOSSES=("0.0" "0.5" "1.0" "2.0")    # 单位：百分数（Mahimahi 语义中 1.0 表示 1%）
+RATE_MBPS=12
+CHUNK=(200 1024 2048 4096 8192 16384 32768)
+LOSSES=("0.0" "0.005" "0.01" "0.02")
 BW="500Mbit"
 RTT_MS=50
 CCA_LIST=("bbr" "cubic")            # 你的 fork 如果支持 --cca

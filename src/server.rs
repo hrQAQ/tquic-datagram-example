@@ -349,6 +349,8 @@ impl ServerHandler {
                         ));
                         if hdr.is_last() {
                             self.finish_if_complete_dg(hdr.file_id);
+                            // close connection after file finished
+                            let _ = conn.close(true, 0x00, b"ok");
                         }
                     }
                     Err(e) => error!("[DGRAM] write error: {e:?}"),
@@ -413,6 +415,8 @@ impl ServerHandler {
                             "[STREAM] {stream_id} finished: {total} bytes -> {}",
                             path.display()
                         );
+                        // close connection after stream finished
+                        let _ = conn.close(true, 0x00, b"ok");
                         break;
                     }
                 }

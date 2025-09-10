@@ -1,19 +1,24 @@
 // tools/src/bin/client.rs
 // TQUIC Client: 发送真实文件（Datagram/Stream），固定码率整形，丰富日志，CSV 可选。
+use std::cell::RefCell;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use bytes::{BufMut, Bytes, BytesMut};
 use clap::Parser;
 use log::{debug, error, info};
 use mio::event::Event;
-use tquic::{Config, Connection, Endpoint, Error, PacketInfo, TlsConfig, TransportHandler, CongestionControlAlgorithm};
 use qskt::{QuicSocket, Result};
+use tquic::{
+    Config, CongestionControlAlgorithm, Connection, Endpoint, Error, PacketInfo, TlsConfig,
+    TransportHandler,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
@@ -144,7 +149,7 @@ struct Client {
     endpoint: Endpoint,
     poll: mio::Poll,
     sock: Rc<QuicSocket>,
-    context: Rc<std::cell::RefCell<ClientContext>>,
+    context: Rc<RefCell<ClientContext>>,
     recv_buf: Vec<u8>,
 }
 
@@ -177,7 +182,7 @@ impl Client {
             opt.datagram_event_mask,
         );
 
-        let ctx = Rc::new(std::cell::RefCell::new(ClientContext { finish: false }));
+        let ctx = Rc::new(RefCell::new(ClientContext { finish: false }));
         let handler = ClientHandler::new(opt, ctx.clone());
 
         let poll = mio::Poll::new()?;
@@ -228,6 +233,16 @@ struct ClientContext {
     finish: bool,
 }
 
+impl ClientContext {
+    fn set_finish(&mut self, finish: bool) {
+        self.finish = finish
+    }
+
+    fn finish(&self) -> bool {
+        self.finish
+    }
+}
+
 struct ClientHandler {
     // options
     mode: Mode,
@@ -250,10 +265,13 @@ struct ClientHandler {
 
     // logs
     csv: Option<File>,
+
+    // ctx
+    context: Rc<RefCell<ClientContext>>,
 }
 
 impl ClientHandler {
-    fn new(opt: &ClientOpt, _ctx: Rc<std::cell::RefCell<ClientContext>>) -> Self {
+    fn new(opt: &ClientOpt, _ctx: Rc<RefCell<ClientContext>>) -> Self {
         let file = File::open(&opt.in_file).expect("open input file");
         let total_size = file.metadata().unwrap().len();
         let bytes_per_sec = (opt.rate_mbps * 1e6 / 8.0) as usize;
@@ -294,6 +312,7 @@ impl ClientHandler {
             next_deadline: Instant::now(),
             stream_id: None,
             csv,
+            context: _ctx,
         }
     }
 
@@ -309,7 +328,7 @@ impl ClientHandler {
 
     fn try_send_more(&mut self, conn: &mut Connection) {
         if self.sent_bytes >= self.total_size {
-            let _ = conn.close(true, 0x00, b"ok");
+            info!("all data sent, closing");
             return;
         }
 
@@ -348,10 +367,7 @@ impl ClientHandler {
                         Ok(()) | Err(Error::Done) => {
                             debug!(
                                 "[DGRAM] send offset={} len={} total_size={} send_ts_ns={}",
-                                hdr.offset,
-                                hdr.len,
-                                hdr.total_size,
-                                hdr.send_ts_ns
+                                hdr.offset, hdr.len, hdr.total_size, hdr.send_ts_ns
                             );
                             self.log_send(hdr.send_ts_ns, off, payload_size, "datagram");
                             self.sent_bytes += payload_size as u64;
@@ -378,6 +394,13 @@ impl ClientHandler {
                         error!("file read_exact_at error: {e:?}");
                         break;
                     }
+                    debug!(
+                        "[STREAM] send offset={} len={} total_size={} data={:?}",
+                        off,
+                        payload_size,
+                        self.total_size,
+                        &buf[..payload_size.min(16)]
+                    );
                     match conn.stream_write(
                         sid,
                         Bytes::from(buf),
@@ -435,17 +458,16 @@ impl TransportHandler for ClientHandler {
             conn.trace_id(),
             self.sent_bytes
         );
+        let mut context = self.context.try_borrow_mut().unwrap();
+        context.set_finish(true);
     }
 
     fn on_stream_writable(&mut self, conn: &mut Connection, _stream_id: u64) {
         self.try_send_more(conn);
-        if self.sent_bytes >= self.total_size {
-            let _ = conn.close(true, 0x00, b"ok");
-        }
     }
 
     fn on_stream_readable(&mut self, _conn: &mut Connection, _stream_id: u64) {
-        // 客户端无需读
+        // client 不读数据
     }
 
     fn on_stream_created(&mut self, conn: &mut Connection, sid: u64) {
